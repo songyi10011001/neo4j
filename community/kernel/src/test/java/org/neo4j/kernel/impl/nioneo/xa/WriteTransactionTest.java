@@ -43,6 +43,7 @@ import org.neo4j.kernel.DefaultIdGeneratorFactory;
 import org.neo4j.kernel.DefaultTxHook;
 import org.neo4j.kernel.api.direct.AllEntriesLabelScanReader;
 import org.neo4j.kernel.api.index.NodePropertyUpdate;
+import org.neo4j.kernel.api.index.Reservation;
 import org.neo4j.kernel.api.labelscan.LabelScanReader;
 import org.neo4j.kernel.api.labelscan.LabelScanStore;
 import org.neo4j.kernel.api.labelscan.NodeLabelUpdate;
@@ -85,6 +86,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.RETURNS_MOCKS;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -92,6 +94,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
+import static org.mockito.Mockito.when;
 import static org.neo4j.helpers.collection.Iterables.count;
 import static org.neo4j.helpers.collection.IteratorUtil.asCollection;
 import static org.neo4j.helpers.collection.IteratorUtil.asSet;
@@ -700,7 +703,7 @@ public class WriteTransactionTest
         prepareAndCommit( tx );
 
         // -- and a tx creating a node with that label and property key
-        IndexingService index = mock( IndexingService.class );
+        IndexingService index = mock( IndexingService.class, RETURNS_MOCKS );
         IteratorCollector<NodePropertyUpdate> indexUpdates = new IteratorCollector<>( 0 );
         doAnswer( indexUpdates ).when( index ).updateIndexes( any( IndexUpdates.class ) );
         CommandCapturingVisitor commandCapturingVisitor = new CommandCapturingVisitor();
@@ -884,7 +887,7 @@ public class WriteTransactionTest
         }
     }
 
-    private final IndexingService mockIndexing = mock( IndexingService.class );
+    private final IndexingService mockIndexing = mock( IndexingService.class, RETURNS_MOCKS );
     private final KernelTransactionImplementation kernelTransaction = mock( KernelTransactionImplementation.class );
 
     private NeoStoreTransaction newWriteTransaction( IndexingService indexing )

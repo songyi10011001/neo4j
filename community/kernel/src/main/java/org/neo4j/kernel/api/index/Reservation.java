@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2002-2014 "Neo Technology,"
+ * Copyright (c) 2002-2015 "Neo Technology,"
  * Network Engine for Objects in Lund AB [http://neotechnology.com]
  *
  * This file is part of Neo4j.
@@ -17,31 +17,17 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-package org.neo4j.kernel.impl.api.index;
+package org.neo4j.kernel.api.index;
 
-import java.io.IOException;
-import java.util.ArrayList;
-
-import org.neo4j.kernel.api.index.IndexUpdater;
-import org.neo4j.kernel.api.index.NodePropertyUpdate;
-import org.neo4j.kernel.api.index.Reservation;
-
-public abstract class CollectingIndexUpdater implements IndexUpdater
+public interface Reservation
 {
-    protected final ArrayList<NodePropertyUpdate> updates = new ArrayList<>();
-
-    @Override
-    public Reservation validate( Iterable<NodePropertyUpdate> updates ) throws IOException
+    static Reservation EMPTY = new Reservation()
     {
-        return Reservation.EMPTY;
-    }
-
-    @Override
-    public void process( NodePropertyUpdate update )
-    {
-        if ( null != update )
+        @Override
+        public void withdraw()
         {
-            updates.add( update );
         }
-    }
+    };
+
+    void withdraw();
 }

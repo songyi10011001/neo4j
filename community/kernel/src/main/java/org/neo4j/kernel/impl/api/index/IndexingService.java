@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Future;
@@ -46,6 +47,7 @@ import org.neo4j.kernel.api.index.IndexPopulator;
 import org.neo4j.kernel.api.index.IndexUpdater;
 import org.neo4j.kernel.api.index.InternalIndexState;
 import org.neo4j.kernel.api.index.NodePropertyUpdate;
+import org.neo4j.kernel.api.index.Reservation;
 import org.neo4j.kernel.api.index.SchemaIndexProvider;
 import org.neo4j.kernel.impl.api.UpdateableSchemaState;
 import org.neo4j.kernel.impl.nioneo.store.IndexRule;
@@ -80,6 +82,16 @@ import static org.neo4j.kernel.impl.api.index.IndexPopulationFailure.failure;
  */
 public class IndexingService extends LifecycleAdapter
 {
+    private static final IndexAction PROCESS_UPDATE = new IndexAction()
+    {
+        @Override
+        public void execute( IndexDescriptor descriptor, IndexUpdater updater, NodePropertyUpdate update )
+                throws IOException, IndexEntryConflictException
+        {
+            updater.process( update );
+        }
+    };
+
     private final IndexMapReference indexMapReference = new IndexMapReference();
 
     private final JobScheduler scheduler;
@@ -327,6 +339,75 @@ public class IndexingService extends LifecycleAdapter
         return String.format( "%s [provider: %s]", userDescription, providerDescriptor.toString() );
     }
 
+    public Reservation validate( IndexUpdates updates )
+    {
+        IndexUpdateMode updateMode = null;
+        if ( state == State.RUNNING )
+        {
+            updateMode = IndexUpdateMode.ONLINE;
+        }
+        else if ( state == State.STARTING )
+        {
+            updateMode = IndexUpdateMode.RECOVERY;
+        }
+
+        if ( updateMode != null )
+        {
+            try ( IndexUpdaterMap updaterMap = indexMapReference.getIndexUpdaterMap( updateMode ) )
+            {
+                Map<IndexDescriptor,List<NodePropertyUpdate>> updatesByIndex =
+                        groupUpdatesByIndexDescriptor( updates, updaterMap );
+
+                if ( updatesByIndex.isEmpty() )
+                {
+                    return Reservation.EMPTY;
+                }
+
+                AggregatedReservation aggregatedReservation = new AggregatedReservation( updatesByIndex.size() );
+
+                for ( Map.Entry<IndexDescriptor,List<NodePropertyUpdate>> entry : updatesByIndex.entrySet() )
+                {
+                    IndexDescriptor descriptor = entry.getKey();
+                    List<NodePropertyUpdate> indexUpdates = entry.getValue();
+
+                    IndexUpdater updater = updaterMap.getUpdater( descriptor );
+
+                    boolean exceptionThrown = false;
+                    try
+                    {
+                        Reservation reservation = updater.validate( indexUpdates );
+                        aggregatedReservation.add( reservation );
+                    }
+                    catch ( IOException e )
+                    {
+                        exceptionThrown = true;
+                        String indexName = descriptor.userDescription( tokenNameLookup );
+                        throw new UnderlyingStorageException(
+                                "Validation of updates for index " + indexName + " failed", e );
+                    }
+                    catch ( Throwable t )
+                    {
+                        exceptionThrown = true;
+                        throw t;
+                    }
+                    finally
+                    {
+                        if ( exceptionThrown )
+                        {
+                            aggregatedReservation.withdraw();
+                        }
+                    }
+                }
+
+                return aggregatedReservation;
+            }
+        }
+        else
+        {
+            return Reservation.EMPTY;
+        }
+    }
+
     public void updateIndexes( IndexUpdates updates )
     {
         if ( state == State.RUNNING )
@@ -378,6 +459,36 @@ public class IndexingService extends LifecycleAdapter
 
     private void applyUpdates( Iterable<NodePropertyUpdate> updates, IndexUpdaterMap updaterMap )
     {
+        processUpdates( updates, updaterMap, PROCESS_UPDATE );
+    }
+
+    private Map<IndexDescriptor,List<NodePropertyUpdate>> groupUpdatesByIndexDescriptor(
+            Iterable<NodePropertyUpdate> updates,
+            IndexUpdaterMap updaterMap )
+    {
+        int numberOfIndexes = updaterMap.numberOfIndexes();
+        final Map<IndexDescriptor,List<NodePropertyUpdate>> updatesByIndex = new HashMap<>( numberOfIndexes, 1 );
+
+        processUpdates( updates, updaterMap, new IndexAction()
+        {
+            @Override
+            public void execute( IndexDescriptor descriptor, IndexUpdater updater, NodePropertyUpdate update )
+                    throws IOException, IndexEntryConflictException
+            {
+                List<NodePropertyUpdate> indexUpdates = updatesByIndex.get( descriptor );
+                if ( indexUpdates == null )
+                {
+                    updatesByIndex.put( descriptor, indexUpdates = new ArrayList<>() );
+                }
+                indexUpdates.add( update );
+            }
+        } );
+
+        return updatesByIndex;
+    }
+
+    private void processUpdates( Iterable<NodePropertyUpdate> updates, IndexUpdaterMap updaterMap, IndexAction action )
+    {
         for ( NodePropertyUpdate update : updates )
         {
             int propertyKeyId = update.getPropertyKeyId();
@@ -386,14 +497,14 @@ public class IndexingService extends LifecycleAdapter
             case ADDED:
                 for ( int len = update.getNumberOfLabelsAfter(), i = 0; i < len; i++ )
                 {
-                    processUpdateIfIndexExists( updaterMap, update, propertyKeyId, update.getLabelAfter( i ) );
+                    processUpdateIfIndexExists( updaterMap, update, propertyKeyId, update.getLabelAfter( i ), action );
                 }
                 break;
 
             case REMOVED:
                 for ( int len = update.getNumberOfLabelsBefore(), i = 0; i < len; i++ )
                 {
-                    processUpdateIfIndexExists( updaterMap, update, propertyKeyId, update.getLabelBefore( i ) );
+                    processUpdateIfIndexExists( updaterMap, update, propertyKeyId, update.getLabelBefore( i ), action );
                 }
                 break;
 
@@ -408,7 +519,7 @@ public class IndexingService extends LifecycleAdapter
 
                     if ( labelBefore == labelAfter )
                     {
-                        processUpdateIfIndexExists( updaterMap, update, propertyKeyId, labelAfter );
+                        processUpdateIfIndexExists( updaterMap, update, propertyKeyId, labelAfter, action );
                         i++;
                         j++;
                     }
@@ -430,7 +541,7 @@ public class IndexingService extends LifecycleAdapter
     }
 
     private void processUpdateIfIndexExists( IndexUpdaterMap updaterMap, NodePropertyUpdate update,
-                                             int propertyKeyId, int labelId )
+                                             int propertyKeyId, int labelId, IndexAction action )
     {
         IndexDescriptor descriptor = new IndexDescriptor( labelId, propertyKeyId );
         try
@@ -438,7 +549,7 @@ public class IndexingService extends LifecycleAdapter
             IndexUpdater updater = updaterMap.getUpdater( descriptor );
             if ( null != updater )
             {
-                updater.process( update );
+                action.execute( descriptor, updater, update );
             }
         }
         catch ( IOException | IndexEntryConflictException e )
@@ -693,6 +804,12 @@ public class IndexingService extends LifecycleAdapter
         }
 
         return concatResourceIterators( snapshots.iterator() );
+    }
+
+    private static interface IndexAction
+    {
+        void execute(IndexDescriptor descriptor, IndexUpdater updater, NodePropertyUpdate update)
+                throws IOException, IndexEntryConflictException;
     }
 }
 

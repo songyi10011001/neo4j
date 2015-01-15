@@ -23,6 +23,8 @@ import java.io.IOException;
 
 public interface IndexUpdater extends AutoCloseable
 {
+    Reservation validate( Iterable<NodePropertyUpdate> updates ) throws IOException;
+
     void process( NodePropertyUpdate update ) throws IOException, IndexEntryConflictException;
 
     @Override

@@ -32,7 +32,6 @@ import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Scorer;
-import org.apache.lucene.search.SearcherFactory;
 import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.TermQuery;
 
@@ -45,6 +44,7 @@ import org.neo4j.kernel.api.index.IndexUpdater;
 import org.neo4j.kernel.api.index.NodePropertyUpdate;
 import org.neo4j.kernel.api.index.PreexistingIndexEntryConflictException;
 import org.neo4j.kernel.api.index.PropertyAccessor;
+import org.neo4j.kernel.api.index.Reservation;
 import org.neo4j.kernel.api.index.util.FailureStorage;
 import org.neo4j.kernel.api.properties.Property;
 
@@ -70,7 +70,7 @@ class DeferredConstraintVerificationUniqueLuceneIndexPopulator extends LuceneInd
     public void create() throws IOException
     {
         super.create();
-        searcherManager = new SearcherManager( writer, true, new SearcherFactory() );
+        searcherManager = writer.createSearcherManager();
     }
 
     @Override
@@ -137,6 +137,12 @@ class DeferredConstraintVerificationUniqueLuceneIndexPopulator extends LuceneInd
         return new IndexUpdater()
         {
             List<Object> updatedPropertyValues = new ArrayList<>();
+
+            @Override
+            public Reservation validate( Iterable<NodePropertyUpdate> updates ) throws IOException
+            {
+                return Reservation.EMPTY;
+            }
 
             @Override
             public void process( NodePropertyUpdate update ) throws IOException, IndexEntryConflictException

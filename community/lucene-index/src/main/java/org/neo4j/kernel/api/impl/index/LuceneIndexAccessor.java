@@ -22,9 +22,7 @@ package org.neo4j.kernel.api.impl.index;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.search.IndexSearcher;
-import org.apache.lucene.search.SearcherFactory;
 import org.apache.lucene.search.SearcherManager;
 import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
@@ -38,7 +36,9 @@ import org.neo4j.kernel.api.index.IndexEntryConflictException;
 import org.neo4j.kernel.api.index.IndexReader;
 import org.neo4j.kernel.api.index.IndexUpdater;
 import org.neo4j.kernel.api.index.NodePropertyUpdate;
+import org.neo4j.kernel.api.index.Reservation;
 import org.neo4j.kernel.impl.api.index.IndexUpdateMode;
+import org.neo4j.kernel.impl.api.index.UpdateMode;
 
 import static org.neo4j.kernel.api.impl.index.DirectorySupport.deleteDirectoryContents;
 
@@ -46,7 +46,7 @@ abstract class LuceneIndexAccessor implements IndexAccessor
 {
     protected final LuceneDocumentStructure documentStructure;
     protected final SearcherManager searcherManager;
-    protected final IndexWriter writer;
+    protected final LuceneIndexWriter writer;
 
     private final IndexWriterStatus writerStatus;
     private final Directory dir;
@@ -61,7 +61,7 @@ abstract class LuceneIndexAccessor implements IndexAccessor
         this.dir = dirFactory.open( dirFile );
         this.writer = indexWriterFactory.create( dir );
         this.writerStatus = writerStatus;
-        this.searcherManager = new SearcherManager( writer, true, new SearcherFactory() );
+        this.searcherManager = writer.createSearcherManager();
     }
 
     @Override
@@ -169,6 +169,32 @@ abstract class LuceneIndexAccessor implements IndexAccessor
         private LuceneIndexUpdater( boolean inRecovery )
         {
             this.inRecovery = inRecovery;
+        }
+
+        @Override
+        public Reservation validate( Iterable<NodePropertyUpdate> updates ) throws IOException
+        {
+            int additionsCount = 0;
+            for ( NodePropertyUpdate update : updates )
+            {
+                // Only count additions, since removals will not affect the size of the index until it is merged
+                if ( update.getUpdateMode() == UpdateMode.ADDED )
+                {
+                    additionsCount++;
+                }
+            }
+
+            writer.reserveDocumentAdditions( additionsCount );
+
+            final int additions = additionsCount;
+            return new Reservation()
+            {
+                @Override
+                public void withdraw()
+                {
+                    writer.withdrawReservationOfDocumentAdditions( additions );
+                }
+            };
         }
 
         @Override

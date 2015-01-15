@@ -25,6 +25,7 @@ import java.io.IOException;
 import org.neo4j.kernel.api.index.IndexEntryConflictException;
 import org.neo4j.kernel.api.index.IndexUpdater;
 import org.neo4j.kernel.api.index.NodePropertyUpdate;
+import org.neo4j.kernel.api.index.Reservation;
 import org.neo4j.kernel.impl.api.index.IndexUpdateMode;
 import org.neo4j.kernel.impl.api.index.UniquePropertyIndexUpdater;
 
@@ -98,6 +99,12 @@ class UniqueLuceneIndexAccessor extends LuceneIndexAccessor
                 delegate.process( update );
             }
             delegate.close();
+        }
+
+        @Override
+        public Reservation validate( Iterable<NodePropertyUpdate> updates ) throws IOException
+        {
+            return delegate.validate( updates );
         }
 
         @Override
